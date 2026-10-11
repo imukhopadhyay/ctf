@@ -20,9 +20,14 @@ export function formatBytes(n: number): string {
 export function formatDateTime(d: Date | string | null | undefined, timeZone?: string): string {
   if (!d) return "—";
   const date = typeof d === "string" ? new Date(d) : d;
+  // Note: `dateStyle`/`timeStyle` cannot be combined with explicit component
+  // options like `timeZoneName`, so we spell out the components.
   return new Intl.DateTimeFormat("en-GB", {
-    dateStyle: "medium",
-    timeStyle: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
     timeZone: timeZone || "UTC",
     timeZoneName: "short",
   }).format(date);

@@ -119,3 +119,17 @@ describe("levelForXp", () => {
     expect(levelForXp(-5).level).toBe(1);
   });
 });
+
+import { formatDateTime, formatBytes } from "@/lib/utils";
+describe("formatters", () => {
+  it("formatDateTime combines timezone name without throwing (regression)", () => {
+    const d = new Date("2026-03-01T09:30:00Z");
+    expect(() => formatDateTime(d, "Asia/Kolkata")).not.toThrow();
+    expect(formatDateTime(d, "UTC")).toMatch(/2026/);
+    expect(formatDateTime(null)).toBe("—");
+  });
+  it("formatBytes", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(2048)).toBe("2.0 KB");
+  });
+});

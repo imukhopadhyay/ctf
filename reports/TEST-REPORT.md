@@ -1,16 +1,16 @@
 # CyberQuest CTF — Test Execution Report
 
-Generated: 2026-10-11T16:46:46.524Z
+Generated: 2026-10-11T17:06:37.169Z
 
 ## Summary
 
 | Result | Count |
 | --- | --- |
-| ✅ Passed | 149 |
+| ✅ Passed | 155 |
 | ❌ Failed | 0 |
-| ⏭️ Skipped | 4 |
+| ⏭️ Skipped | 0 |
 | 📝 Todo / not implemented | 0 |
-| **Total** | **153** |
+| **Total** | **155** |
 
 All executed tests passed.
 
@@ -67,35 +67,10 @@ All executed tests passed.
 
 ### `tests/runner/docker-backend.test.ts`
 
-- ⏭️ (skipped) DockerBackend (live) refuses images outside the allow-list
-- ⏭️ (skipped) DockerBackend (live) starts an isolated container and serves the per-instance flag only via the exploit
-- ⏭️ (skipped) DockerBackend (live) runs non-root with no network egress
-- ⏭️ (skipped) DockerBackend (live) destroys the container and its network
-
-## Security
-
-### `tests/security/api-security.test.ts`
-
-- ✅ administrative endpoints require authentication (401) and the right role (403)
-- ✅ administrative endpoints participants cannot change competition state or list teams/submissions
-- ✅ administrative endpoints rejects unknown settings keys (mass assignment)
-- ✅ CSRF protection rejects state-changing requests from foreign or missing origins
-- ✅ CSRF protection requires JSON content type (blocks simple cross-site form posts)
-- ✅ flag confidentiality participant-facing responses never contain flags, digests or staff-only fields
-- ✅ flag confidentiality even staff APIs never return stored flag digests
-- ✅ flag confidentiality participants cannot read the staff challenge endpoint
-- ✅ flag confidentiality unpublished challenges are 404 for participants (no enumeration) and cannot be submitted to
-- ✅ score manipulation ignores client-supplied points/scores in submissions
-- ✅ score manipulation participants cannot call the adjustment endpoint
-- ✅ score manipulation replaying a correct submission does not re-award points
-- ✅ cross-team privacy a participant cannot read another team's score ledger or submissions
-- ✅ cross-team privacy public leaderboard does not expose team invite codes or member emails
-- ✅ artifact access control and upload safety downloads are forced attachments with nosniff and sandbox CSP; only for visible, published challenges
-- ✅ artifact access control and upload safety rejects malicious archives and oversized uploads, and participants cannot upload
-- ✅ authentication & session security sets an httpOnly SameSite session cookie and never returns the password hash
-- ✅ authentication & session security rejects forged and malformed session tokens
-- ✅ authentication & session security rate limits login attempts per IP
-- ✅ authentication & session security returns a uniform validation envelope for bad input
+- ✅ DockerBackend (live) refuses images outside the allow-list
+- ✅ DockerBackend (live) starts an isolated container and serves the per-instance flag only via the exploit
+- ✅ DockerBackend (live) runs non-root with no network egress
+- ✅ DockerBackend (live) destroys the container and its network
 
 ## Unit
 
@@ -206,3 +181,30 @@ All executed tests passed.
 - ✅ computeStandings aggregates team scores from multiple members' events
 - ✅ scoreProgression produces cumulative series per subject
 - ✅ levelForXp maps XP to levels
+- ✅ formatters formatDateTime combines timezone name without throwing (regression)
+- ✅ formatters formatBytes
+
+## Security
+
+### `tests/security/api-security.test.ts`
+
+- ✅ administrative endpoints require authentication (401) and the right role (403)
+- ✅ administrative endpoints participants cannot change competition state or list teams/submissions
+- ✅ administrative endpoints rejects unknown settings keys (mass assignment)
+- ✅ CSRF protection rejects state-changing requests from foreign or missing origins
+- ✅ CSRF protection requires JSON content type (blocks simple cross-site form posts)
+- ✅ flag confidentiality participant-facing responses never contain flags, digests or staff-only fields
+- ✅ flag confidentiality even staff APIs never return stored flag digests
+- ✅ flag confidentiality participants cannot read the staff challenge endpoint
+- ✅ flag confidentiality unpublished challenges are 404 for participants (no enumeration) and cannot be submitted to
+- ✅ score manipulation ignores client-supplied points/scores in submissions
+- ✅ score manipulation participants cannot call the adjustment endpoint
+- ✅ score manipulation replaying a correct submission does not re-award points
+- ✅ cross-team privacy a participant cannot read another team's score ledger or submissions
+- ✅ cross-team privacy public leaderboard does not expose team invite codes or member emails
+- ✅ artifact access control and upload safety downloads are forced attachments with nosniff and sandbox CSP; only for visible, published challenges
+- ✅ artifact access control and upload safety rejects malicious archives and oversized uploads, and participants cannot upload
+- ✅ authentication & session security sets an httpOnly SameSite session cookie and never returns the password hash
+- ✅ authentication & session security rejects forged and malformed session tokens
+- ✅ authentication & session security rate limits login attempts per IP
+- ✅ authentication & session security returns a uniform validation envelope for bad input
