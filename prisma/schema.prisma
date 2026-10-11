@@ -1,0 +1,807 @@
+// CyberQuest CTF — data model
+// Conventions:
+//  * ids are cuid strings; timestamps are timestamptz (UTC).
+//  * "subjectKey" is the scoring subject: "team:<teamId>" (team mode) or
+//    "user:<userId>" (individual mode). It allows DB-level uniqueness for both.
+//  * Plaintext flags, passwords and session tokens are never stored.
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Role {
+  ADMIN
+  ORGANIZER
+  EVALUATOR
+  PARTICIPANT
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum StaffRole {
+  ORGANIZER
+  EVALUATOR
+}
+
+enum CompetitionStatus {
+  DRAFT
+  SCHEDULED
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum ParticipationMode {
+  INDIVIDUAL
+  TEAM
+}
+
+enum AccessMode {
+  PUBLIC // anyone may register
+  PRIVATE // registrations require organizer approval
+  INVITATION // registration requires the competition invite code
+}
+
+enum ScoringModel {
+  STATIC
+  DYNAMIC
+}
+
+enum TieBreak {
+  EARLIEST_LAST_SOLVE
+  FEWEST_SUBMISSIONS
+}
+
+enum IdentityDisplay {
+  FULL
+  ANONYMIZED
+}
+
+enum SolutionDisclosure {
+  NEVER
+  AFTER_SOLVE
+  AFTER_END
+}
+
+enum RegistrationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WITHDRAWN
+}
+
+enum TeamRole {
+  CAPTAIN
+  MEMBER
+}
+
+enum Difficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+enum ChallengeStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  PUBLISHED
+  ARCHIVED
+  RETIRED
+}
+
+enum AccessMethod {
+  OFFLINE // description + downloadable artifacts only
+  INSTANCE // isolated per-subject environment from the runner
+}
+
+enum GradingMode {
+  FLAG
+  MANUAL
+}
+
+enum FlagType {
+  STATIC
+  INSTANCE
+}
+
+enum SubmissionResult {
+  CORRECT
+  INCORRECT
+  ALREADY_SOLVED
+  PENDING_REVIEW
+  REJECTED_REVIEW
+}
+
+enum ScoreEventType {
+  SOLVE
+  HINT_PENALTY
+  WRONG_SUBMISSION_PENALTY
+  MANUAL_GRADE
+  ADJUSTMENT
+  RECALCULATION
+}
+
+enum InstanceStatus {
+  PROVISIONING
+  RUNNING
+  STOPPED
+  EXPIRED
+  FAILED
+}
+
+enum AchievementScope {
+  USER
+  TEAM
+}
+
+enum ReviewVerdict {
+  APPROVE
+  CHANGES_REQUESTED
+  COMMENT
+}
+
+enum Severity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
+// ───────────────────────── Identity & access ─────────────────────────
+
+model Institution {
+  id           String        @id @default(cuid())
+  name         String        @unique
+  slug         String        @unique
+  domain       String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  users        User[]
+  competitions Competition[]
+}
+
+model User {
+  id             String      @id @default(cuid())
+  email          String      @unique // stored lower-cased
+  username       String      @unique // stored lower-cased, used in URLs
+  displayName    String
+  passwordHash   String
+  role           Role        @default(PARTICIPANT)
+  status         UserStatus  @default(ACTIVE)
+  institutionId  String?
+  institution    Institution? @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+  failedLogins   Int         @default(0)
+  lockedUntil    DateTime?
+  lastLoginAt    DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  sessions          Session[]
+  staffAssignments  CompetitionStaff[]
+  registrations     CompetitionRegistration[]
+  memberships       TeamMembership[]
+  captainOf         Team[]               @relation("TeamCaptain")
+  submissions       Submission[]         @relation("SubmissionUser")
+  gradedSubmissions Submission[]         @relation("SubmissionGrader")
+  solves            Solve[]
+  hintUnlocks       HintUnlock[]
+  authoredChallenges Challenge[]         @relation("ChallengeAuthor")
+  reviewingChallenges Challenge[]        @relation("ChallengeReviewer")
+  reviews           ChallengeReview[]
+  achievements      UserAchievement[]
+  notifications     Notification[]
+  instances         ChallengeInstance[]
+  createdCompetitions Competition[]      @relation("CompetitionCreator")
+  announcements     Announcement[]
+  auditLogs         AuditLog[]
+  scoreEventsCreated ScoreEvent[]        @relation("ScoreEventCreator")
+  scoreEvents       ScoreEvent[]         @relation("ScoreEventUser")
+  uploadedArtifacts ChallengeArtifact[]
+
+  @@index([role])
+  @@index([institutionId])
+}
+
+model Session {
+  id         String   @id // SHA-256 of the opaque token; the token itself is never stored
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  expiresAt  DateTime
+  ipHash     String? // keyed hash, for session listing / anomaly detection
+  userAgent  String? // truncated
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model CompetitionStaff {
+  id            String      @id @default(cuid())
+  competitionId String
+  competition   Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role          StaffRole
+  createdAt     DateTime    @default(now())
+
+  @@unique([competitionId, userId, role])
+  @@index([userId])
+}
+
+// ───────────────────────────── Competitions ─────────────────────────────
+
+model Competition {
+  id                     String             @id @default(cuid())
+  slug                   String             @unique
+  name                   String
+  tagline                String?
+  description            String             @default("")
+  bannerTheme            String             @default("teal")
+  institutionId          String?
+  institution            Institution?       @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+  status                 CompetitionStatus  @default(DRAFT)
+  timezone               String             @default("UTC")
+  startsAt               DateTime
+  endsAt                 DateTime?
+  registrationOpensAt    DateTime?
+  registrationDeadline   DateTime?
+  mode                   ParticipationMode  @default(INDIVIDUAL)
+  minTeamSize            Int                @default(1)
+  maxTeamSize            Int                @default(4)
+  accessMode             AccessMode         @default(PUBLIC)
+  inviteCodeHash         String? // HMAC of the invitation code (INVITATION access)
+  scoringModel           ScoringModel       @default(STATIC)
+  tieBreak               TieBreak           @default(EARLIEST_LAST_SOLVE)
+  rules                  String             @default("")
+  permittedTools         String             @default("")
+  prohibitedActivities   String             @default("")
+  hintPenaltiesEnabled   Boolean            @default(true)
+  wrongSubmissionPenalty Int                @default(0)
+  defaultAttemptLimit    Int?
+  freezeAt               DateTime?
+  identityDisplay        IdentityDisplay    @default(FULL)
+  allowTeamChangesWhileActive Boolean       @default(false)
+  solutionDisclosure     SolutionDisclosure @default(AFTER_END)
+  isPractice             Boolean            @default(false)
+  createdById            String?
+  createdBy              User?              @relation("CompetitionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  staff         CompetitionStaff[]
+  registrations CompetitionRegistration[]
+  teams         Team[]
+  challenges    Challenge[]
+  submissions   Submission[]
+  solves        Solve[]
+  scoreEvents   ScoreEvent[]
+  hintUnlocks   HintUnlock[]
+  announcements Announcement[]
+  instances     ChallengeInstance[]
+  auditLogs     AuditLog[]
+  securityEvents SecurityEvent[]
+
+  @@index([status])
+  @@index([startsAt])
+}
+
+model CompetitionRegistration {
+  id            String             @id @default(cuid())
+  competitionId String
+  competition   Competition        @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status        RegistrationStatus @default(APPROVED)
+  createdAt     DateTime           @default(now())
+  decidedAt     DateTime?
+  decidedById   String?
+
+  @@unique([competitionId, userId])
+  @@index([userId])
+  @@index([competitionId, status])
+}
+
+model Team {
+  id             String           @id @default(cuid())
+  competitionId  String
+  competition    Competition      @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  name           String
+  nameNormalized String
+  inviteCode     String           @unique
+  captainId      String?
+  captain        User?            @relation("TeamCaptain", fields: [captainId], references: [id], onDelete: SetNull)
+  hidden         Boolean          @default(false) // excluded from public standings (e.g. disqualified)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  members        TeamMembership[]
+  solves         Solve[]
+  submissions    Submission[]
+  achievements   TeamAchievement[]
+  scoreEvents    ScoreEvent[]
+  hintUnlocks    HintUnlock[]
+  instances      ChallengeInstance[]
+
+  @@unique([competitionId, nameNormalized])
+  @@index([competitionId])
+}
+
+model TeamMembership {
+  id            String   @id @default(cuid())
+  teamId        String
+  team          Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  competitionId String // denormalized so a user can belong to only one team per competition
+  role          TeamRole @default(MEMBER)
+  joinedAt      DateTime @default(now())
+
+  @@unique([competitionId, userId])
+  @@index([teamId])
+}
+
+// ───────────────────────────── Challenges ─────────────────────────────
+
+model ChallengeCategory {
+  id          String      @id @default(cuid())
+  slug        String      @unique
+  name        String
+  description String      @default("")
+  icon        String      @default("flag")
+  sortOrder   Int         @default(0)
+  challenges  Challenge[]
+}
+
+model ExecutionEnvironment {
+  id           String      @id @default(cuid())
+  key          String      @unique
+  name         String
+  description  String      @default("")
+  image        String // container image reference; must be pre-approved by an admin
+  protocol     String      @default("http") // http | tcp
+  internalPort Int
+  memoryMb     Int         @default(128)
+  cpuMillis    Int         @default(250) // 1000 = one CPU
+  pidsLimit    Int         @default(64)
+  ttlMinutes   Int         @default(30)
+  enabled      Boolean     @default(false)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  challenges   Challenge[]
+  instances    ChallengeInstance[]
+}
+
+model Challenge {
+  id                 String          @id @default(cuid())
+  competitionId      String
+  competition        Competition     @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  slug               String
+  title              String
+  categoryId         String
+  category           ChallengeCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  subcategory        String?
+  description        String          @default("")
+  learningObjectives String          @default("")
+  difficulty         Difficulty      @default(BEGINNER)
+  points             Int             @default(100)
+  scoringModel       ScoringModel? // null = inherit competition setting
+  minPoints          Int             @default(50)
+  decay              Int             @default(20) // number of solves to reach minPoints
+  authorId           String?
+  author             User?           @relation("ChallengeAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  reviewerId         String?
+  reviewer           User?           @relation("ChallengeReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  estimatedMinutes   Int?
+  accessMethod       AccessMethod    @default(OFFLINE)
+  environmentId      String?
+  environment        ExecutionEnvironment? @relation(fields: [environmentId], references: [id], onDelete: SetNull)
+  gradingMode        GradingMode     @default(FLAG)
+  attemptLimit       Int? // null = competition default / unlimited
+  releaseAt          DateTime?
+  closeAt            DateTime?
+  status             ChallengeStatus @default(DRAFT)
+  tags               String[]        @default([])
+  skills             String[]        @default([])
+  solution           String          @default("") // staff-only
+  instructorNotes    String          @default("") // staff-only
+  explanation        String          @default("") // concept explanation, disclosed per competition policy
+  remediation        String          @default("") // disclosed per competition policy
+  version            Int             @default(1)
+  flagsTestedAt      DateTime? // set when an organizer successfully tests the current flags
+  publishedAt        DateTime?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  prerequisites Challenge[] @relation("ChallengePrerequisites")
+  unlocks       Challenge[] @relation("ChallengePrerequisites")
+  versions      ChallengeVersion[]
+  artifacts     ChallengeArtifact[]
+  flags         FlagConfiguration[]
+  hints         Hint[]
+  instances     ChallengeInstance[]
+  submissions   Submission[]
+  solves        Solve[]
+  scoreEvents   ScoreEvent[]
+  reviews       ChallengeReview[]
+
+  @@unique([competitionId, slug])
+  @@index([competitionId, status])
+  @@index([categoryId])
+}
+
+model ChallengeVersion {
+  id          String    @id @default(cuid())
+  challengeId String
+  challenge   Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  version     Int
+  snapshot    Json // challenge content at this version (never includes flags)
+  changeNote  String    @default("")
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  @@unique([challengeId, version])
+}
+
+model ChallengeArtifact {
+  id           String    @id @default(cuid())
+  challengeId  String
+  challenge    Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  filename     String // sanitized display/download name
+  storageKey   String // content-addressed key (sha256)
+  sha256       String
+  sizeBytes    Int
+  mimeType     String    @default("application/octet-stream")
+  detectedType String    @default("unknown") // from magic bytes
+  metadata     Json      @default("{}") // e.g. ELF arch, image dimensions, archive listing
+  description  String    @default("")
+  visible      Boolean   @default(true) // participants may download when the challenge is visible
+  uploadedById String?
+  uploadedBy   User?     @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime  @default(now())
+
+  @@unique([challengeId, filename])
+  @@index([sha256])
+}
+
+model FlagConfiguration {
+  id                  String    @id @default(cuid())
+  challengeId         String
+  challenge           Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  type                FlagType  @default(STATIC)
+  label               String    @default("flag") // e.g. stage name for multi-stage challenges
+  digest              String? // HMAC-SHA256(FLAG_PEPPER, normalized flag); null for INSTANCE flags
+  keyVersion          Int       @default(1)
+  caseSensitive       Boolean   @default(true)
+  normalizeWhitespace Boolean   @default(false)
+  active              Boolean   @default(true)
+  expiresAt           DateTime?
+  createdAt           DateTime  @default(now())
+  rotatedAt           DateTime?
+  submissions         Submission[]
+
+  @@index([challengeId, active])
+}
+
+model Hint {
+  id                String       @id @default(cuid())
+  challengeId       String
+  challenge         Challenge    @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  order             Int          @default(0)
+  title             String       @default("Hint")
+  content           String
+  cost              Int          @default(0)
+  requiresPrevious  Boolean      @default(true)
+  minAttempts       Int          @default(0) // incorrect attempts required before unlock is allowed
+  availableAfter    DateTime?
+  createdAt         DateTime     @default(now())
+  unlocks           HintUnlock[]
+
+  @@index([challengeId])
+}
+
+model HintUnlock {
+  id            String      @id @default(cuid())
+  hintId        String
+  hint          Hint        @relation(fields: [hintId], references: [id], onDelete: Cascade)
+  competitionId String
+  competition   Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  subjectKey    String
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teamId        String?
+  team          Team?       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  cost          Int
+  createdAt     DateTime    @default(now())
+
+  @@unique([hintId, subjectKey])
+  @@index([competitionId, subjectKey])
+}
+
+model ChallengeInstance {
+  id             String         @id @default(cuid())
+  challengeId    String
+  challenge      Challenge      @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  competitionId  String
+  competition    Competition    @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  environmentId  String?
+  environment    ExecutionEnvironment? @relation(fields: [environmentId], references: [id], onDelete: SetNull)
+  subjectKey     String
+  userId         String
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teamId         String?
+  team           Team?          @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  status         InstanceStatus @default(PROVISIONING)
+  runnerRef      String? // opaque runner-side handle
+  connection     Json? // { url?, host, port, protocol }
+  expiresAt      DateTime
+  resetCount     Int            @default(0)
+  lastError      String?
+  createdAt      DateTime       @default(now())
+  stoppedAt      DateTime?
+  events         ChallengeInstanceEvent[]
+  submissions    Submission[]
+
+  @@index([challengeId, subjectKey, status])
+  @@index([status, expiresAt])
+}
+
+model ChallengeInstanceEvent {
+  id         String            @id @default(cuid())
+  instanceId String
+  instance   ChallengeInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  type       String // REQUESTED, STARTED, RESET, STOPPED, EXPIRED, FAILED, STATS
+  detail     Json              @default("{}")
+  createdAt  DateTime          @default(now())
+
+  @@index([instanceId, createdAt])
+}
+
+model ChallengeReview {
+  id                String        @id @default(cuid())
+  challengeId       String
+  challenge         Challenge     @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  reviewerId        String
+  reviewer          User          @relation(fields: [reviewerId], references: [id], onDelete: Cascade)
+  verdict           ReviewVerdict
+  qualityRating     Int? // 1..5
+  educationalRating Int? // 1..5
+  comments          String        @default("")
+  challengeVersion  Int
+  createdAt         DateTime      @default(now())
+
+  @@index([challengeId])
+}
+
+// ───────────────────────── Submissions & scoring ─────────────────────────
+
+model Submission {
+  id            String           @id @default(cuid())
+  competitionId String
+  competition   Competition      @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  challengeId   String
+  challenge     Challenge        @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User             @relation("SubmissionUser", fields: [userId], references: [id], onDelete: Cascade)
+  teamId        String?
+  team          Team?            @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  subjectKey    String
+  result        SubmissionResult
+  fingerprint   String? // truncated keyed hash of the normalized submission — never the value
+  flagId        String?
+  flag          FlagConfiguration? @relation(fields: [flagId], references: [id], onDelete: SetNull)
+  instanceId    String?
+  instance      ChallengeInstance? @relation(fields: [instanceId], references: [id], onDelete: SetNull)
+  writeup       String? // MANUAL grading only
+  ipHash        String?
+  gradedById    String?
+  gradedBy      User?            @relation("SubmissionGrader", fields: [gradedById], references: [id], onDelete: SetNull)
+  gradedAt      DateTime?
+  feedback      String?
+  createdAt     DateTime         @default(now())
+  solve         Solve?
+
+  @@index([competitionId, createdAt])
+  @@index([challengeId, subjectKey])
+  @@index([userId, createdAt])
+  @@index([fingerprint])
+}
+
+model Solve {
+  id            String      @id @default(cuid())
+  competitionId String
+  competition   Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  challengeId   String
+  challenge     Challenge   @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  subjectKey    String
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teamId        String?
+  team          Team?       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  submissionId  String      @unique
+  submission    Submission  @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  points        Int
+  isFirstBlood  Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+
+  @@unique([challengeId, subjectKey])
+  @@index([competitionId, subjectKey])
+  @@index([competitionId, createdAt])
+}
+
+model ScoreEvent {
+  id            String         @id @default(cuid())
+  competitionId String
+  competition   Competition    @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  subjectKey    String
+  userId        String?
+  user          User?          @relation("ScoreEventUser", fields: [userId], references: [id], onDelete: SetNull)
+  teamId        String?
+  team          Team?          @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  type          ScoreEventType
+  points        Int // signed
+  challengeId   String?
+  challenge     Challenge?     @relation(fields: [challengeId], references: [id], onDelete: SetNull)
+  refId         String? // solve / hint unlock / submission id the event derives from
+  reason        String
+  createdById   String?
+  createdBy     User?          @relation("ScoreEventCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime       @default(now())
+
+  @@index([competitionId, subjectKey])
+  @@index([competitionId, createdAt])
+}
+
+// ───────────────────────────── Gamification ─────────────────────────────
+
+model Achievement {
+  id          String           @id @default(cuid())
+  key         String           @unique
+  name        String
+  description String
+  icon        String           @default("award")
+  xp          Int              @default(50)
+  scope       AchievementScope @default(USER)
+  criteria    Json // see src/server/domain/achievement-rules.ts
+  enabled     Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  users       UserAchievement[]
+  teams       TeamAchievement[]
+}
+
+model UserAchievement {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId String
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  competitionId String?
+  awardedAt     DateTime    @default(now())
+
+  @@unique([userId, achievementId])
+}
+
+model TeamAchievement {
+  id            String      @id @default(cuid())
+  teamId        String
+  team          Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  achievementId String
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  awardedAt     DateTime    @default(now())
+
+  @@unique([teamId, achievementId])
+}
+
+// ───────────────────────── Communication ─────────────────────────
+
+model Announcement {
+  id            String      @id @default(cuid())
+  competitionId String
+  competition   Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  title         String
+  body          String
+  pinned        Boolean     @default(false)
+  createdById   String?
+  createdBy     User?       @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime    @default(now())
+
+  @@index([competitionId, createdAt])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String    @default("")
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt, createdAt])
+}
+
+// ───────────────────────── Audit & security ─────────────────────────
+
+model AuditLog {
+  id            String       @id @default(cuid())
+  actorId       String?
+  actor         User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action        String // e.g. competition.create, challenge.publish, score.adjust
+  targetType    String?
+  targetId      String?
+  competitionId String?
+  competition   Competition? @relation(fields: [competitionId], references: [id], onDelete: SetNull)
+  metadata      Json         @default("{}") // never contains secrets
+  ipHash        String?
+  createdAt     DateTime     @default(now())
+
+  @@index([createdAt])
+  @@index([action])
+  @@index([competitionId, createdAt])
+  @@index([targetType, targetId])
+}
+
+model SecurityEvent {
+  id             String       @id @default(cuid())
+  type           String // RATE_LIMIT, LOGIN_FAILURE, ACCOUNT_LOCKED, ACCESS_DENIED, FLAG_SHARING_SUSPECTED, ...
+  severity       Severity     @default(LOW)
+  userId         String?
+  competitionId  String?
+  competition    Competition? @relation(fields: [competitionId], references: [id], onDelete: SetNull)
+  ipHash         String?
+  details        Json         @default("{}")
+  acknowledgedAt DateTime?
+  acknowledgedById String?
+  createdAt      DateTime     @default(now())
+
+  @@index([createdAt])
+  @@index([type, createdAt])
+}
+
+// ───────────────────────── Platform ─────────────────────────
+
+model PlatformSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+  updatedById String?
+}
+
+model Job {
+  id        String    @id @default(cuid())
+  type      String
+  payload   Json      @default("{}")
+  status    JobStatus @default(PENDING)
+  runAt     DateTime  @default(now())
+  attempts  Int       @default(0)
+  lastError String?
+  lockedAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([status, runAt])
+}
