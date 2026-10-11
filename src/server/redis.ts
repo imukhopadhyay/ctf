@@ -12,7 +12,9 @@ export function redis(): Redis | null {
     g.redis = null;
     return null;
   }
-  const client = new Redis(url, { maxRetriesPerRequest: 2, enableOfflineQueue: false, lazyConnect: false });
+  // Offline queue stays enabled so commands issued while the socket is still
+  // connecting are not rejected (which would make rate limits fail open).
+  const client = new Redis(url, { maxRetriesPerRequest: 2, connectTimeout: 5000, commandTimeout: 2000 });
   client.on("error", (err) => console.error("[redis]", err.message));
   g.redis = client;
   return client;

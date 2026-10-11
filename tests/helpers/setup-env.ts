@@ -1,7 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 
-process.env.NODE_ENV = "test";
+(process.env as Record<string, string>).NODE_ENV = "test";
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? "postgresql://cyberquest:cyberquest_dev@localhost:5432/cyberquest_test";
 process.env.APP_URL = "http://localhost:3000";
 process.env.SESSION_SECRET = "test-session-secret-0123456789abcdef0123456789abcdef";

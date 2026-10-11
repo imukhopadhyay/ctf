@@ -187,12 +187,17 @@ export async function adminTerminateInstance(actor: Actor | null, instanceId: st
   await audit({ actorId: user.id, action: "instance.terminate", targetType: "instance", targetId: instanceId, competitionId: instance.competitionId });
 }
 
-export async function runnerHealth(actor: Actor | null) {
+export type RunnerHealthResult =
+  | { configured: false }
+  | { configured: true; health: Awaited<ReturnType<typeof runner.health>>; error?: undefined }
+  | { configured: true; health?: undefined; error: string };
+
+export async function runnerHealth(actor: Actor | null): Promise<RunnerHealthResult> {
   await requirePlatform(actor, "platform.environments.manage");
-  if (!runnerConfigured()) return { configured: false as const };
+  if (!runnerConfigured()) return { configured: false };
   try {
-    return { configured: true as const, health: await runner.health() };
+    return { configured: true, health: await runner.health() };
   } catch (e) {
-    return { configured: true as const, error: (e as Error).message };
+    return { configured: true, error: (e as Error).message };
   }
 }

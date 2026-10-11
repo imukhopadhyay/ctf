@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import { createSession, SESSION_COOKIE } from "@/server/auth/session";
 
-type Handler = (req: NextRequest, ctx: { params: Promise<Record<string, string>> }) => Promise<Response>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Handler = (req: NextRequest, ctx: { params: Promise<any> }) => Promise<Response>;
 
 export interface CallOptions {
   method?: string;

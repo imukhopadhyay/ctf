@@ -223,7 +223,7 @@ describe("challenge authoring and visibility", () => {
 
     const p = await makeUser();
     await register(comp.id, p);
-    const w = await submitWriteup(p, comp.id, chal.id, "Timeline: attacker logged in at 02:14 via stolen key, then exfiltrated data.", ip);
+    const w = (await submitWriteup(p, comp.id, chal.id, "Timeline: attacker logged in at 02:14 via stolen key, then exfiltrated data.", ip)) as { status: string; submissionId?: string };
     expect(w.status).toBe("pending_review");
     await expect(submitWriteup(p, comp.id, chal.id, "Another attempt with enough characters in it.", ip)).rejects.toThrow(/awaiting/);
     const res = await gradeSubmission(ev, w.submissionId!, { accept: true, points: 250, feedback: "Good analysis" });
