@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { inspectZip, isUnsafeArchivePath } from "@/server/domain/archive-inspect";
 import { detectType, inspectFile } from "@/server/domain/file-inspect";
 import { contentDisposition, sanitizeFilename } from "@/server/domain/filename";
@@ -72,7 +73,6 @@ describe("file type detection", () => {
   });
   it("extracts ELF metadata from a real binary", () => {
     const self = execFileSync("readlink", ["-f", "/bin/ls"]).toString().trim();
-    const { readFileSync } = require("node:fs") as typeof import("node:fs");
     const info = inspectFile(readFileSync(self));
     expect(info.detectedType).toBe("elf");
     expect(info.metadata.format).toMatch(/ELF(32|64)/);

@@ -14,6 +14,7 @@ const TABLES = [
 ];
 
 export async function resetDb() {
+  // eslint-disable-next-line no-restricted-syntax -- test helper truncates a fixed, code-defined table list (no user input)
   await db.$executeRawUnsafe(`TRUNCATE ${TABLES.map((t) => `"${t}"`).join(", ")} RESTART IDENTITY CASCADE`);
   resetMemoryRateLimits();
 }

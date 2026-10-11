@@ -1,0 +1,99 @@
+# Local development / evaluation stack. For production see docs/DEPLOYMENT.md.
+# Generate secrets first:  cp .env.example .env  &&  edit the three secrets.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cyberquest
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cyberquest_dev}
+      POSTGRES_DB: cyberquest
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cyberquest"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  migrate:
+    build: { context: ., target: runner }
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://cyberquest:${POSTGRES_PASSWORD:-cyberquest_dev}@db:5432/cyberquest
+    depends_on:
+      db: { condition: service_healthy }
+
+  web:
+    build: { context: ., target: runner }
+    environment:
+      DATABASE_URL: postgresql://cyberquest:${POSTGRES_PASSWORD:-cyberquest_dev}@db:5432/cyberquest
+      REDIS_URL: redis://redis:6379
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      FLAG_PEPPER: ${FLAG_PEPPER:?set FLAG_PEPPER in .env}
+      INSTANCE_FLAG_SECRET: ${INSTANCE_FLAG_SECRET:?set INSTANCE_FLAG_SECRET in .env}
+      STORAGE_DIR: /data/artifacts
+      RUNNER_URL: ${RUNNER_URL:-}
+      RUNNER_SHARED_SECRET: ${RUNNER_SHARED_SECRET:-}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+    volumes:
+      - artifacts:/data/artifacts
+    ports:
+      - "3000:3000"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  worker:
+    build: { context: ., target: worker }
+    environment:
+      DATABASE_URL: postgresql://cyberquest:${POSTGRES_PASSWORD:-cyberquest_dev}@db:5432/cyberquest
+      REDIS_URL: redis://redis:6379
+      SESSION_SECRET: ${SESSION_SECRET:?}
+      FLAG_PEPPER: ${FLAG_PEPPER:?}
+      INSTANCE_FLAG_SECRET: ${INSTANCE_FLAG_SECRET:?}
+      STORAGE_DIR: /data/artifacts
+      RUNNER_URL: ${RUNNER_URL:-}
+      RUNNER_SHARED_SECRET: ${RUNNER_SHARED_SECRET:-}
+    volumes:
+      - artifacts:/data/artifacts
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  # Challenge runner. Disabled by default (RUNNER_BACKEND=disabled).
+  # To enable execution-based challenges, read docs/SANDBOX.md FIRST, then set
+  # RUNNER_BACKEND=docker and run this on an isolated, dedicated host — NOT here
+  # alongside the app. Mounting the Docker socket grants root-equivalent access.
+  runner:
+    build: { context: ., dockerfile: runner/Dockerfile }
+    profiles: ["runner"]
+    environment:
+      RUNNER_PORT: 4100
+      RUNNER_SHARED_SECRET: ${RUNNER_SHARED_SECRET:?set RUNNER_SHARED_SECRET to enable the runner}
+      RUNNER_BACKEND: ${RUNNER_BACKEND:-disabled}
+      RUNNER_ALLOWED_IMAGES: ${RUNNER_ALLOWED_IMAGES:-cyberquest/chal-}
+      RUNNER_PUBLIC_HOST: ${RUNNER_PUBLIC_HOST:-127.0.0.1}
+      RUNNER_BIND_HOST: 0.0.0.0
+      RUNNER_MAX_INSTANCES: ${RUNNER_MAX_INSTANCES:-50}
+      RUNNER_DOCKER_RUNTIME: ${RUNNER_DOCKER_RUNTIME:-}
+    # volumes: [ "/var/run/docker.sock:/var/run/docker.sock" ]  # uncomment on the dedicated runner host only
+    ports:
+      - "127.0.0.1:4100:4100"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  artifacts:

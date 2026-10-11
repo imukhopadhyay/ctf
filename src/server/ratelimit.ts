@@ -7,8 +7,11 @@ export interface RateLimitResult {
   retryAfterSeconds: number;
 }
 
-// In-process fallback (single instance / tests only).
-const memory = new Map<string, { count: number; resetAt: number }>();
+// In-process fallback (single instance / tests only). Pinned to globalThis so
+// that, even if a bundler loads this module under two specifiers, every copy
+// shares one map and resetMemoryRateLimits() clears them all.
+const g = globalThis as unknown as { __cqRateLimitMemory?: Map<string, { count: number; resetAt: number }> };
+const memory = (g.__cqRateLimitMemory ??= new Map<string, { count: number; resetAt: number }>());
 
 /**
  * Fixed-window rate limiter. Uses Redis when configured so limits are shared

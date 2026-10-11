@@ -4,7 +4,7 @@
  * Proves: isolated container start, egress denial, non-root + dropped caps,
  * per-instance flag delivery, the SQLi exploit, and cleanup.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { DockerBackend } from "../../runner/src/docker-backend";
 import type { RunnerConfig } from "../../runner/src/config";

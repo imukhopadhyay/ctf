@@ -1,0 +1,61 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env: { POSTGRES_USER: cyberquest, POSTGRES_PASSWORD: cyberquest_dev, POSTGRES_DB: cyberquest_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cyberquest" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://cyberquest:cyberquest_dev@localhost:5432/cyberquest_test
+      DATABASE_URL: postgresql://cyberquest:cyberquest_dev@localhost:5432/cyberquest_test
+      SESSION_SECRET: ci-session-secret-0123456789abcdef0123456789abcdef
+      FLAG_PEPPER: ci-flag-pepper-0123456789abcdef0123456789abcdef
+      INSTANCE_FLAG_SECRET: ci-instance-secret-0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+        env: { DATABASE_URL: "${{ env.TEST_DATABASE_URL }}" }
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Unit, integration & security tests
+        run: npm test
+      - name: Test report
+        if: always()
+        run: npm run test:report
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: test-report, path: reports/TEST-REPORT.md }
+      - name: Production build
+        run: npm run build
+      - name: Dependency audit (high+)
+        run: npm audit --omit=dev --audit-level=high || echo "::warning::npm audit reported advisories; review before release"
+
+  docker-images:
+    runs-on: ubuntu-latest
+    needs: build-test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build web/worker image
+        run: docker build -t cyberquest-web:ci --target runner .
+      - name: Build runner image
+        run: docker build -t cyberquest-runner:ci -f runner/Dockerfile .
+      - name: Build challenge images & scan filesystem
+        run: bash challenges/build.sh
+      # A container image scanner (e.g. Trivy) should run here in a real pipeline:
+      # - uses: aquasecurity/trivy-action@master
+      #   with: { image-ref: cyberquest-web:ci, severity: HIGH,CRITICAL, exit-code: 1 }

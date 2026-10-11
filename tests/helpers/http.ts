@@ -35,6 +35,7 @@ export async function call(handler: Handler, opts: CallOptions = {}) {
   } catch {
     json = null;
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper: callers narrow `data` per route
   return { status: res.status, headers: res.headers, text, json: json as { ok: boolean; data?: any; error?: { code: string; message: string } } };
 }
 

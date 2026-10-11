@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+storage
+reports
+test-results
+playwright-report
+challenges/build
+*.log
+.env
+.env.local
