@@ -1,0 +1,75 @@
+name: Deploy
+# Deploys the published images to a host over SSH using the production
+# docker-compose stack, running database migrations first. Manual by default;
+# also runs automatically on version tags. Requires a configured GitHub
+# Environment named "production" with the secrets listed below — the job is
+# skipped cleanly if DEPLOY_HOST is not set, so the workflow never fails a repo
+# that has not configured a target yet.
+#
+# Required environment secrets:
+#   DEPLOY_HOST      - host/IP of the target server
+#   DEPLOY_USER      - SSH user
+#   DEPLOY_SSH_KEY   - private key authorised on the host
+#   DEPLOY_PATH      - directory on the host containing docker-compose.yml + .env
+# The host's .env must hold SESSION_SECRET, FLAG_PEPPER, INSTANCE_FLAG_SECRET,
+# DATABASE_URL, REDIS_URL, APP_URL (https) and any runner settings.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Image tag to deploy (branch, vX.Y.Z or short SHA)"
+        required: true
+        default: "main"
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check target configured
+        id: gate
+        run: |
+          if [ -z "${{ secrets.DEPLOY_HOST }}" ]; then
+            echo "No DEPLOY_HOST secret set — skipping deploy. Configure the 'production' environment secrets to enable." >> "$GITHUB_STEP_SUMMARY"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Deploy over SSH
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          TAG: ${{ github.event.inputs.ref || github.ref_name }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/id_deploy "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" bash -s <<REMOTE
+            set -euo pipefail
+            cd "${{ secrets.DEPLOY_PATH }}"
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            export CYBERQUEST_IMAGE_TAG="${TAG}"
+            docker compose pull
+            # Run migrations to completion before swapping the app.
+            docker compose run --rm migrate
+            docker compose up -d --remove-orphans
+            docker image prune -f
+          REMOTE
+      - name: Smoke-check health
+        if: steps.gate.outputs.ready == 'true' && secrets.DEPLOY_HEALTH_URL != ''
+        run: |
+          for i in $(seq 1 20); do
+            if curl -fsS "${{ secrets.DEPLOY_HEALTH_URL }}" >/dev/null; then echo "healthy"; exit 0; fi
+            sleep 5
+          done
+          echo "health check did not pass" >&2; exit 1
