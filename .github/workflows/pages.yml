@@ -1,0 +1,45 @@
+name: Docs site (GitHub Pages)
+# Publishes the project documentation as a static site on GitHub Pages.
+# NOTE: this is the DOCS site only. CyberQuest is a server application
+# (PostgreSQL + Redis + optional runner) and cannot run on GitHub Pages — deploy
+# the container images to a host instead (see .github/workflows/deploy.yml and
+# docs/DEPLOYMENT.md).
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**", "README.md", "docs-site/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble static site
+        run: |
+          mkdir -p _site/docs
+          cp docs-site/index.html _site/index.html
+          cp README.md _site/docs/README.md
+          cp docs/*.md _site/docs/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

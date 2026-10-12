@@ -1,0 +1,77 @@
+# Production stack using images published to GHCR by the "Release images"
+# workflow. Place this (as docker-compose.yml) plus a populated .env on the
+# deploy host; the Deploy workflow runs `docker compose pull`, `migrate`, `up`.
+#
+# Set in the host .env (or environment):
+#   GHCR_OWNER            e.g. imukhopadhyay   (ghcr.io/<owner>/ctf-*)
+#   CYBERQUEST_IMAGE_TAG  e.g. main | v1.0.0 | <short-sha>
+# plus SESSION_SECRET, FLAG_PEPPER, INSTANCE_FLAG_SECRET, APP_URL, and
+# POSTGRES_PASSWORD. See docs/DEPLOYMENT.md.
+x-image-tag: &tag ${CYBERQUEST_IMAGE_TAG:-main}
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: cyberquest
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: cyberquest
+    volumes: [ "pgdata:/var/lib/postgresql/data" ]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cyberquest"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck: { test: ["CMD","redis-cli","ping"], interval: 5s, timeout: 3s, retries: 10 }
+    restart: unless-stopped
+
+  migrate:
+    image: ghcr.io/${GHCR_OWNER:?set GHCR_OWNER}/ctf-web:${CYBERQUEST_IMAGE_TAG:-main}
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://cyberquest:${POSTGRES_PASSWORD}@db:5432/cyberquest
+    depends_on: { db: { condition: service_healthy } }
+    restart: "no"
+
+  web:
+    image: ghcr.io/${GHCR_OWNER}/ctf-web:${CYBERQUEST_IMAGE_TAG:-main}
+    environment:
+      DATABASE_URL: postgresql://cyberquest:${POSTGRES_PASSWORD}@db:5432/cyberquest
+      REDIS_URL: redis://redis:6379
+      APP_URL: ${APP_URL:?set APP_URL}
+      SESSION_SECRET: ${SESSION_SECRET:?}
+      FLAG_PEPPER: ${FLAG_PEPPER:?}
+      INSTANCE_FLAG_SECRET: ${INSTANCE_FLAG_SECRET:?}
+      STORAGE_DIR: /data/artifacts
+      TRUST_PROXY: ${TRUST_PROXY:-true}
+      RUNNER_URL: ${RUNNER_URL:-}
+      RUNNER_SHARED_SECRET: ${RUNNER_SHARED_SECRET:-}
+    volumes: [ "artifacts:/data/artifacts" ]
+    ports: [ "3000:3000" ]
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  worker:
+    image: ghcr.io/${GHCR_OWNER}/ctf-worker:${CYBERQUEST_IMAGE_TAG:-main}
+    environment:
+      DATABASE_URL: postgresql://cyberquest:${POSTGRES_PASSWORD}@db:5432/cyberquest
+      REDIS_URL: redis://redis:6379
+      SESSION_SECRET: ${SESSION_SECRET:?}
+      FLAG_PEPPER: ${FLAG_PEPPER:?}
+      INSTANCE_FLAG_SECRET: ${INSTANCE_FLAG_SECRET:?}
+      STORAGE_DIR: /data/artifacts
+      RUNNER_URL: ${RUNNER_URL:-}
+      RUNNER_SHARED_SECRET: ${RUNNER_SHARED_SECRET:-}
+    volumes: [ "artifacts:/data/artifacts" ]
+    depends_on: { db: { condition: service_healthy } }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  artifacts:

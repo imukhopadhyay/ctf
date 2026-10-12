@@ -95,3 +95,41 @@ competitions exactly.
 Work through `docs/SECURITY.md` §8, confirm CI is green (typecheck, lint, tests,
 build, audit, image scan), run `migrate deploy`, verify `/api/health`, rotate
 seed credentials, and (if used) confirm the runner's isolation report.
+
+## GitHub-based deployment
+
+Three GitHub Actions workflows (plus CI) implement the GitHub deployment story:
+
+- **`.github/workflows/ci.yml`** — typecheck, lint, tests, build, audit and image
+  build on every push/PR.
+- **`.github/workflows/release-images.yml`** — on pushes to `main` and `v*` tags,
+  builds and pushes three images to GHCR:
+  `ghcr.io/<owner>/ctf-web`, `-worker`, `-runner` (tagged by branch, semver and
+  short SHA).
+- **`.github/workflows/deploy.yml`** — manual (`workflow_dispatch`) or on `v*`
+  tags; SSHes to a host, runs `docker compose pull`, the `migrate` job, then
+  `up -d`. It no-ops safely until the `production` environment secrets exist.
+- **`.github/workflows/pages.yml`** — publishes the documentation site
+  (`docs-site/` + `docs/`) to GitHub Pages. This is **docs only**; the app
+  itself is a server application and does not run on Pages.
+
+### One-time setup
+
+1. **Packages**: the release workflow uses the built-in `GITHUB_TOKEN`
+   (`packages: write`) — no secret needed. After the first run, the GHCR packages
+   appear under the repo; make them private/internal as desired.
+2. **Pages**: repo Settings → Pages → Build and deployment → Source =
+   **GitHub Actions**. The docs site then publishes on each push to `main`.
+3. **Deploy target** (optional): create a **`production`** Environment (repo
+   Settings → Environments) with secrets `DEPLOY_HOST`, `DEPLOY_USER`,
+   `DEPLOY_SSH_KEY`, `DEPLOY_PATH`, and optional `DEPLOY_HEALTH_URL`. Add
+   required reviewers for a manual approval gate.
+4. **On the host**: place `docker-compose.prod.yml` (as `docker-compose.yml`) and
+   a populated `.env` in `DEPLOY_PATH` (set `GHCR_OWNER`, `POSTGRES_PASSWORD`,
+   `APP_URL` and the three secrets). Ensure the host can `docker login ghcr.io`.
+
+### Deploying
+
+- Tag a release: `git tag v1.0.0 && git push --tags` → images build, then deploy
+  runs; or trigger **Deploy** manually from the Actions tab with an image tag.
+- The default branch should be `main`; feature work lands via pull requests.
